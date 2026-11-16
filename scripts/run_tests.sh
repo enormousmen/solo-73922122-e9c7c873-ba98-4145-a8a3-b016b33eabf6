@@ -15,4 +15,8 @@ echo "=== cancel/complete arbitration tests ==="
 "$PY" -I tests/test_cancel_race.py
 
 echo
+echo "=== external write-lock contention tests ==="
+"$PY" -I tests/test_lock_contention.py
+
+echo
 echo "ALL SHORT SELF-TESTS PASSED"

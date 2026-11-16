@@ -19,6 +19,8 @@ from pathlib import Path
 
 # Make the project root importable when executed as a script.
 ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = ROOT / "tests" / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT))
 
 import httpx  # noqa: E402
@@ -85,7 +87,7 @@ def parse_fastq(data: bytes) -> list[tuple[str, bytes]]:
 
 async def main_async() -> int:
     tmp_root = Path(tempfile.mkdtemp(prefix="fastq-test-",
-                                     dir=str(ROOT / "tests" / "output")))
+                                     dir=str(OUTPUT_DIR)))
     data_dir = tmp_root / "data"
     os.environ["FASTQ_DATA_DIR"] = str(data_dir)
     config.DATA_DIR = data_dir

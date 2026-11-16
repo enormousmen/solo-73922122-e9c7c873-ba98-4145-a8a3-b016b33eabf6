@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Paired FASTQ Service · 操作台</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+           margin: 0; padding: 24px; line-height: 1.5; }
+    main { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin-top: 0; }
+    section { border: 1px solid #8884; border-radius: 10px;
+              padding: 16px 18px; margin: 16px 0; }
+    h2 { font-size: 1.05rem; margin: 0 0 12px; }
+    label { display: block; margin: 8px 0 4px; font-weight: 600; }
+    input[type=file], input[type=text] { width: 100%; box-sizing: border-box;
+              padding: 7px; border: 1px solid #8886; border-radius: 6px; }
+    button { margin: 6px 8px 0 0; padding: 7px 14px; border-radius: 6px;
+             border: 1px solid #8886; cursor: pointer; }
+    button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+    button.danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    pre { background: #8881; border-radius: 8px; padding: 12px;
+          overflow: auto; max-height: 340px; font-size: .85rem; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .row > * { flex: 1 1 220px; }
+    .muted { opacity: .7; font-size: .85rem; }
+    a.dl { display: inline-block; margin: 8px 12px 0 0; }
+    .status { font-weight: 700; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Paired FASTQ Service · 操作台</h1>
+  <p class="muted">
+    上传乱序双端 FASTQ（R1/R2，未压缩，单文件 ≤ 256 MiB），按读段号重新配对；
+    结果按 R1 顺序交付且原文逐字节保留。也可访问
+    <a href="/docs">/docs</a>（Swagger UI，需能访问其 CDN）或
+    <a href="/openapi.json">/openapi.json</a>。
+  </p>
+
+  <section>
+    <h2>1. 上传</h2>
+    <form id="upload-form">
+      <label for="r1">R1 FASTQ</label>
+      <input type="file" id="r1" name="r1" required>
+      <label for="r2">R2 FASTQ</label>
+      <input type="file" id="r2" name="r2" required>
+      <button class="primary" type="submit" id="upload-btn">上传并开始配对</button>
+      <button type="reset">清空</button>
+    </form>
+    <pre id="upload-out" hidden></pre>
+  </section>
+
+  <section>
+    <h2>2. 查询 / 取消</h2>
+    <label for="task-id">任务 ID</label>
+    <div class="row">
+      <input type="text" id="task-id" placeholder="上传后自动填入，也可粘贴已有任务 ID">
+      <button type="button" id="query-btn">查询状态</button>
+      <button type="button" class="danger" id="cancel-btn">取消任务</button>
+      <button type="button" id="poll-btn">自动轮询至终态</button>
+    </div>
+    <p>状态：<span class="status" id="status-text">—</span></p>
+    <pre id="query-out" hidden></pre>
+    <div id="downloads"></div>
+  </section>
+
+  <section>
+    <h2>3. 下载</h2>
+    <p class="muted">任务成功后，这里会出现两个下载链接；也可直接访问
+      <code>/tasks/&lt;id&gt;/download/r1</code> 与
+      <code>/tasks/&lt;id&gt;/download/r2</code>。</p>
+    <div id="downloads-2"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const uploadOut = $("upload-out");
+  const queryOut = $("query-out");
+  const statusText = $("status-text");
+  const taskInput = $("task-id");
+  const downloads = $("downloads");
+  const downloads2 = $("downloads-2");
+  let pollTimer = null;
+
+  function show(el, obj) {
+    el.hidden = false;
+    el.textContent = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2);
+  }
+
+  function renderDownloads(task) {
+    downloads.innerHTML = "";
+    downloads2.innerHTML = "";
+    if (!task || task.status !== "succeeded") return;
+    for (const [side, label] of [["r1", "下载 R1"], ["r2", "下载 R2"]]) {
+      const href = `/tasks/${encodeURIComponent(task.id)}/download/${side}`;
+      for (const host of [downloads, downloads2]) {
+        const a = document.createElement("a");
+        a.className = "dl";
+        a.href = href;
+        a.textContent = `${label} (${side.toUpperCase()})`;
+        a.setAttribute("download", `${side.toUpperCase()}.fastq`);
+        host.appendChild(a);
+      }
+    }
+  }
+
+  async function query(id) {
+    const res = await fetch(`/tasks/${encodeURIComponent(id)}`);
+    const body = await res.json().catch(() => ({}));
+    show(queryOut, res.ok ? body : { http: res.status, ...body });
+    if (res.ok) {
+      statusText.textContent = body.status +
+        (body.message ? ` · ${body.message}` : "");
+      renderDownloads(body);
+    } else {
+      statusText.textContent = `HTTP ${res.status}`;
+      renderDownloads(null);
+    }
+    return { ok: res.ok, status: res.ok ? body.status : null, body };
+  }
+
+  $("upload-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const r1 = $("r1").files[0];
+    const r2 = $("r2").files[0];
+    if (!r1 || !r2) return;
+    const btn = $("upload-btn");
+    btn.disabled = true;
+    statusText.textContent = "上传中…";
+    try {
+      const fd = new FormData();
+      fd.append("r1", r1, r1.name);
+      fd.append("r2", r2, r2.name);
+      const res = await fetch("/tasks", { method: "POST", body: fd });
+      const body = await res.json().catch(() => ({}));
+      show(uploadOut, res.ok ? body : { http: res.status, ...body });
+      if (res.ok) {
+        taskInput.value = body.id;
+        await query(body.id);
+      } else {
+        statusText.textContent = `上传失败 HTTP ${res.status}`;
+      }
+    } catch (err) {
+      show(uploadOut, String(err));
+      statusText.textContent = "上传失败";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("query-btn").addEventListener("click", async () => {
+    const id = taskInput.value.trim();
+    if (!id) { statusText.textContent = "请输入任务 ID"; return; }
+    try { await query(id); }
+    catch (err) { statusText.textContent = `查询失败: ${err}`; }
+  });
+
+  $("cancel-btn").addEventListener("click", async () => {
+    const id = taskInput.value.trim();
+    if (!id) { statusText.textContent = "请输入任务 ID"; return; }
+    try {
+      const res = await fetch(`/tasks/${encodeURIComponent(id)}/cancel`,
+                              { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      show(queryOut, res.ok ? body : { http: res.status, ...body });
+      statusText.textContent = res.ok
+        ? `取消已受理 · ${body.status}`
+        : `HTTP ${res.status}${body.detail ? " · " + body.detail : ""}`;
+      await query(id);
+    } catch (err) {
+      statusText.textContent = `取消失败: ${err}`;
+    }
+  });
+
+  $("poll-btn").addEventListener("click", async () => {
+    const id = taskInput.value.trim();
+    if (!id) { statusText.textContent = "请输入任务 ID"; return; }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    const terminal = new Set(["succeeded", "failed", "cancelled"]);
+    const tick = async () => {
+      try {
+        const r = await query(id);
+        if (!r.ok || terminal.has(r.status)) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } catch (err) {
+        statusText.textContent = `轮询失败: ${err}`;
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+    await tick();
+    if (pollTimer === null) return;
+    pollTimer = setInterval(tick, 500);
+    // tick() above may have cleared before the interval was assigned.
+    if (!pollTimer) return;
+    if (terminal.has(statusText.textContent.split(" · ")[0])) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  });
+
+  // Prefill ?task=<id> for convenience.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("task")) {
+    taskInput.value = params.get("task");
+    query(taskInput.value).catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>

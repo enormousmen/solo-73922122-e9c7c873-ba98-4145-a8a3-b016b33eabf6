@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -125,7 +126,26 @@ def parse_file(
             raise FastqFormatError(
                 f"{side_label}: duplicate read id '{existing['read_id']}'"
             )
-        conn.execute("BEGIN IMMEDIATE")
+        # Retry a busy write lock with a short, cancellation-aware backoff
+        # instead of blocking for SQLite's busy timeout. A cancel requested
+        # while we wait aborts the batch before the lock is released.
+        delay = 0.005
+        while True:
+            if is_cancelled():
+                raise TaskCancelled()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                break
+            except sqlite3.OperationalError as exc:
+                if not db.is_lock_error(exc):
+                    raise
+                if conn.in_transaction:
+                    try:
+                        conn.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                time.sleep(delay)
+                delay = min(delay * 1.5, 0.05)
         try:
             db.insert_records(conn, task_id, batch)
             conn.execute("COMMIT")

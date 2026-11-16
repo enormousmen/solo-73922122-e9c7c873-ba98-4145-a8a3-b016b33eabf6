@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = ROOT / "tests" / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 RECORDS = int(sys.argv[1]) if len(sys.argv) > 1 else 5_000_000
 # Python + sqlite baseline is small; require a comfortable margin under 256 MiB.
 RSS_LIMIT_KIB = 230 * 1024
@@ -130,7 +132,7 @@ def verify_outputs(base: Path, n: int) -> tuple[bool, str]:
 
 def main() -> int:
     scratch = Path(tempfile.mkdtemp(prefix="fastq-mem-",
-                                    dir=str(ROOT / "tests" / "output")))
+                                    dir=str(OUTPUT_DIR)))
     data_dir = scratch / "data"
     data_dir.mkdir(parents=True)
     print(f"Generating {RECORDS:,} records per side (~"

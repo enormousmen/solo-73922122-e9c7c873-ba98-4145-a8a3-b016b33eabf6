@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = ROOT / "tests" / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 sys.path.insert(0, str(ROOT))
 
 from app import config, db  # noqa: E402
@@ -25,7 +27,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def main() -> int:
-    tmp = Path(tempfile.mkdtemp(dir=str(ROOT / "tests" / "output")))
+    tmp = Path(tempfile.mkdtemp(dir=str(OUTPUT_DIR)))
     config.DATA_DIR = tmp
     config.DB_PATH = tmp / "t.db"
     config.TASKS_DIR = tmp / "tasks"
